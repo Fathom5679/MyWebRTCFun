@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+
+<html>
+
+<head><title>Client (MUD Player)</title></head>
+
+<body>
+
+  <h1>WebRTC Client - MUD Player</h1>
+
+
+
+  <h3>Step 1: Create Offer</h3>
+
+  <button onclick="makeOffer()">Generate Offer</button>
+
+  <textarea id="offerOutput" rows="10" cols="70" readonly></textarea>
+
+
+
+  <h3>Step 2: Paste Host Answer</h3>
+
+  <textarea id="answerInput" rows="10" cols="70" placeholder="Paste host's answer here"></textarea><br>
+
+  <button onclick="connect()">Connect</button>
+
+
+
+  <h3>Chat</h3>
+
+  <textarea id="chat" rows="15" cols="70" readonly></textarea><br>
+
+  <input id="msg" placeholder="Say something..." />
+
+  <button onclick="send()">Send</button>
+
+
+
+  <script>
+
+    let pc, dc;
+
+
+
+    async function makeOffer() {
+
+      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+      dc = pc.createDataChannel("chat");
+
+
+
+      const offer = await pc.createOffer();
+
+      await pc.setLocalDescription(offer);
+
+
+
+      const iceCandidates = [];
+
+      pc.onicecandidate = e => {
+
+        if (e.candidate) {
+
+          iceCandidates.push(e.candidate);
+
+        } else {
+
+          document.getElementById('offerOutput').value = JSON.stringify({
+
+            offer: pc.localDescription,
+
+            ice: iceCandidates
+
+          }, null, 2);
+
+        }
+
+      };
+
+
+
+      dc.onmessage = e => {
+
+        document.getElementById("chat").value += "\n" + e.data;
+
+      };
+
+    }
+
+
+
+    async function connect() {
+
+      const data = JSON.parse(document.getElementById('answerInput').value);
+
+      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+
+      for (const c of data.ice) {
+
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+
+      }
+
+    }
+
+
+
+    function send() {
+
+      const msg = document.getElementById("msg").value;
+
+      dc.send(msg);
+
+      document.getElementById("chat").value += "\nYou: " + msg;
+
+      document.getElementById("msg").value = "";
+
+    }
+
+  </script>
+
+</body>
+
+</html>
