@@ -75,24 +75,6 @@
       try {
         pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
-        dc = pc.createDataChannel("chat");
-        dc.onopen = () => {
-          dc.send("/nick " + nickname);
-          dc.send("/join " + currentChannel);
-        };
-        dc.onmessage = e => {
-          const text = e.data;
-          const match = text.match(/^\[(.*?)\] (.+?): (.*)$/);
-          if (match) {
-            log(match[3], match[2]);
-          } else {
-            log(text);
-          }
-        };
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
         const iceCandidates = [];
         pc.onicecandidate = e => {
           if (e.candidate) {
@@ -104,6 +86,24 @@
             }, null, 2);
           }
         };
+
+        dc = pc.createDataChannel("chat");
+        dc.onopen = () => {
+          dc.send("/nick " + nickname);
+          dc.send("/join " + currentChannel);
+        };
+        dc.onmessage = e => {
+          const text = e.data;
+          const match = text.match(/\[(.*?)\] (.+?): (.*)/);
+          if (match) {
+            log(match[3], match[2]);
+          } else {
+            log(text);
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
       } catch (err) {
         alert("WebRTC not supported or blocked.");
         console.error("Offer generation failed:", err);
@@ -113,6 +113,8 @@
     async function connect() {
       try {
         const data = JSON.parse(document.getElementById('answerInput').value);
+        if (!data.answer || !data.ice) throw new Error("Missing SDP answer or ICE candidates");
+
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         for (const c of data.ice) {
           await pc.addIceCandidate(new RTCIceCandidate(c));
