@@ -1,170 +1,83 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>IRC Server</title>
-  <style>
-    body { font-family: sans-serif; background: #1e1e2f; color: #f0f0f0; margin: 20px; }
-    textarea, input { background: #2d2d3a; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
-    textarea { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
-    input { width: calc(100% - 120px); margin-right: 10px; }
-    .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #3a3a4f; color: white; border: none; border-radius: 6px; cursor: pointer; }
-    .btn:hover { background: #50506f; }
-    .avatar-img { width: 24px; height: 24px; vertical-align: middle; border-radius: 50%; margin-right: 6px; }
-  </style>
-</head>
+<head><title>IRC Server</title></head>
 <body>
   <h1>IRC Server</h1>
   <h3>Paste Client Offer</h3>
-  <textarea id="offerInput" rows="6" placeholder="Paste client offer here"></textarea><br>
-  <button class="btn" onclick="acceptConnection()">Accept Connection</button>
-
+  <textarea id="offerInput" rows="10" cols="70" placeholder="Paste client offer here"></textarea><br>
+  <button onclick="acceptConnection()">Accept Connection</button>
   <h3>Send This Answer to Client</h3>
-  <textarea id="answerOutput" rows="6" readonly></textarea>
-
+  <textarea id="answerOutput" rows="10" cols="70" readonly></textarea>
   <h3>Chat Log</h3>
-  <textarea id="log" rows="15" readonly></textarea><br>
-  <input id="serverMsg" placeholder="Server message...">
-  <button class="btn" onclick="broadcast()">Send to All</button>
-  <button class="btn" onclick="disconnectAll()">Disconnect All</button>
-
-  <h3>Log Controls</h3>
-  <button class="btn" onclick="exportLogs()">Export Chat Log</button>
-  <input type="file" id="importLogFile" onchange="importLogs(event)" />
-
+  <textarea id="log" rows="15" cols="70" readonly></textarea><br>
+  <input id="serverMsg" placeholder="Server message..." />
+  <button onclick="broadcast()">Send to All</button>
+  <button onclick="disconnectAll()">Disconnect All</button>
   <script>
     const peers = [];
-    const channels = { "#general": [] };
-    const chatHistory = [];
-    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
-
-    function log(msg) {
+    const log = msg => {
       const logBox = document.getElementById("log");
-      logBox.value += msg + "\n";
+      logBox.value += msg + '\n';
       logBox.scrollTop = logBox.scrollHeight;
-      chatHistory.push(msg);
-    }
-
-    function createPeerConnection() {
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      return pc;
-    }
+    };
 
     async function acceptConnection() {
-      const offerText = document.getElementById("offerInput").value;
-      const answerOutput = document.getElementById("answerOutput");
-
-      let parsed;
-      try {
-        parsed = JSON.parse(offerText);
-      } catch (err) {
-        answerOutput.value = "[Error] Invalid JSON in offer.";
-        return;
-      }
-
-      const pc = createPeerConnection();
-      const dataChannelCandidates = [];
+      const data = JSON.parse(document.getElementById('offerInput').value);
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const answerTextarea = document.getElementById('answerOutput');
+      const iceCandidates = [];
 
       pc.ondatachannel = event => {
         const channel = event.channel;
-        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general" };
-        peers.push(peer);
-        switchChannel(peer, "#general");
-
         log("[Server] New client connected.");
-
-        channel.onmessage = e => handleMessage(peer, e.data);
+        peers.push({ pc, channel });
+        channel.onmessage = e => {
+          log(e.data);
+          peers.forEach(p => {
+            if (p.channel.readyState === "open") {
+              p.channel.send(e.data);
+            }
+          });
+        };
       };
 
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(parsed.offer));
-        for (const c of parsed.ice) {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      }
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          iceCandidates.push(e.candidate);
+        } else {
+          answerTextarea.value = JSON.stringify({
+            answer: pc.localDescription,
+            ice: iceCandidates
+          }, null, 2);
         }
-
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        pc.onicecandidate = e => {
-          if (e.candidate) {
-            dataChannelCandidates.push(e.candidate);
-          } else {
-            answerOutput.value = JSON.stringify({ answer: pc.localDescription, ice: dataChannelCandidates }, null, 2);
-          }
-        };
-      } catch (err) {
-        answerOutput.value = `[Error] ${err.message}`;
-      }
-    }
-
-    function switchChannel(peer, channel) {
-      if (!channels[channel]) channels[channel] = [];
-      if (peer.currentChannel) {
-        channels[peer.currentChannel] = channels[peer.currentChannel].filter(p => p !== peer);
-      }
-      channels[channel].push(peer);
-      peer.currentChannel = channel;
-    }
-
-    function handleMessage(peer, text) {
-      if (text.startsWith("/")) {
-        const parts = text.slice(1).split(" ");
-        const command = parts[0];
-        const args = parts.slice(1);
-        // Command handling placeholder
-        return;
-      }
-
-      const emojiText = text.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
-      const formatted = `${peer.nickname} (${peer.currentChannel}): ${emojiText}`;
-      log(formatted);
-      broadcastToChannel(peer.currentChannel, formatted);
-      new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
-    }
-
-    function sendToPeer(peer, msg) {
-      if (peer.channel.readyState === "open") {
-        peer.channel.send(msg);
-      }
-    }
-
-    function broadcastToChannel(channel, msg) {
-      channels[channel]?.forEach(p => sendToPeer(p, msg));
+      };
     }
 
     function broadcast() {
       const msg = "Server: " + document.getElementById("serverMsg").value;
-      peers.forEach(p => sendToPeer(p, msg));
+      peers.forEach(p => {
+        if (p.channel.readyState === "open") {
+          p.channel.send(msg);
+        }
+      });
       log(msg);
       document.getElementById("serverMsg").value = "";
     }
 
     function disconnectAll() {
       peers.forEach(p => {
-        p.channel.close();
-        p.pc.close();
+        if (p.channel) p.channel.close();
+        if (p.pc) p.pc.close();
       });
       peers.length = 0;
       log("[Server] All clients disconnected.");
-    }
-
-    function exportLogs() {
-      const blob = new Blob([chatHistory.join("\n")], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "chat_log.txt";
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-
-    function importLogs(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        e.target.result.split("\n").forEach(line => log(line));
-      };
-      reader.readAsText(file);
     }
   </script>
 </body>
