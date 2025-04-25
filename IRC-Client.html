@@ -87,21 +87,19 @@
 /who - show users in the current channel
 /me action - send an action message
 /nick newname - change your nickname
-/kick user - (admin) kick a user
+/kick user - (mod/admin) kick a user
 /ban user - (admin) ban a user
 /promote user - (admin) promote a user to moderator
-/mute user - (mod/admin) mute a user`;
+/mute user - (mod/admin) mute a user
+/unmute user - (mod/admin) unmute a user
+/roles - list your current roles`;
           document.getElementById("chat").value += helpText + "\n";
-        } else if (command === "/join" && parts.length >= 2) {
+        } else if (["/join", "/create"].includes(command) && parts.length >= 2) {
           currentChannel = parts[1];
           document.getElementById("channel").value = currentChannel;
-          document.getElementById("chat").value += `Switched to channel: ${currentChannel}\n`;
-        } else if (command === "/create" && parts.length >= 2) {
-          currentChannel = parts[1];
-          document.getElementById("channel").value = currentChannel;
-          document.getElementById("chat").value += `Created and switched to channel: ${currentChannel}\n`;
-        } else if (command === "/list") {
-          dc.send("/list");
+          document.getElementById("chat").value += `${command === "/join" ? "Switched to" : "Created and switched to"} channel: ${currentChannel}\n`;
+        } else if (["/list", "/roles"].includes(command)) {
+          dc.send(command);
         } else if (command === "/who") {
           dc.send("/who " + currentChannel);
         } else if (command === "/me" && parts.length >= 2) {
@@ -111,7 +109,7 @@
           const newNick = parts[1];
           document.getElementById("nickname").value = newNick;
           document.getElementById("chat").value += `Nickname changed to ${newNick}\n`;
-        } else if (["/kick", "/ban", "/promote", "/mute"].includes(command) && parts.length >= 2) {
+        } else if (["/kick", "/ban", "/promote", "/mute", "/unmute"].includes(command) && parts.length >= 2) {
           dc.send(rawMessage);
         } else {
           document.getElementById("chat").value += "Unknown command. Type /help for a list.\n";
