@@ -9,100 +9,74 @@
     input { width: calc(100% - 120px); margin-right: 10px; }
     .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #33334d; color: white; border: none; border-radius: 6px; cursor: pointer; }
     .btn:hover { background: #4a4a6f; }
-    .avatar-img { width: 24px; height: 24px; vertical-align: middle; border-radius: 50%; margin-right: 6px; }
   </style>
 </head>
 <body>
   <h1>IRC Client</h1>
-  <h3>Paste Server Answer</h3>
-  <textarea id="answerInput" rows="6" placeholder="Paste server answer here"></textarea><br>
-  <button class="btn" onclick="connectToServer()">Connect to Server</button>
 
-  <h3>Send This Offer to Server</h3>
-  <textarea id="offerOutput" rows="6" readonly></textarea>
+  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br><br>
+  <h3>Step 1: Generate Offer</h3>
+  <button class="btn" onclick="makeOffer()">Generate Offer</button>
+  <textarea id="offerOutput" rows="10" readonly></textarea>
 
-  <h3>Chat Log</h3>
-  <textarea id="log" rows="15" readonly></textarea><br>
-  <input id="messageInput" placeholder="Your message...">
-  <button class="btn" onclick="sendMessage()">Send</button>
+  <h3>Step 2: Paste Server Answer</h3>
+  <textarea id="answerInput" rows="10" placeholder="Paste server answer here"></textarea><br>
+  <button class="btn" onclick="connect()">Connect</button>
+
+  <h3>Chat</h3>
+  <textarea id="chat" rows="15" readonly></textarea><br>
+  <input id="msg" placeholder="Message..." />
+  <button class="btn" onclick="send()">Send</button>
+  <button class="btn" onclick="disconnect()">Disconnect</button>
 
   <script>
-    let pc;
-    let dc;
-    const logBox = document.getElementById("log");
-    const chatHistory = [];
+    let pc, dc;
 
-    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
-
-    function log(msg) {
-      logBox.value += msg + "\n";
-      logBox.scrollTop = logBox.scrollHeight;
-      chatHistory.push(msg);
-    }
-
-    function createPeerConnection() {
+    async function makeOffer() {
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      const candidates = [];
-
       dc = pc.createDataChannel("chat");
-      dc.onopen = () => log("[Client] Connected to server.");
+
       dc.onmessage = e => {
-        log(e.data);
-        new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
+        const chatBox = document.getElementById("chat");
+        chatBox.value += e.data + "\n";
+        chatBox.scrollTop = chatBox.scrollHeight;
       };
 
-      pc.onicecandidate = e => {
-        if (e.candidate) {
-          candidates.push(e.candidate);
-        } else {
-          document.getElementById("offerOutput").value = JSON.stringify({ offer: pc.localDescription, ice: candidates }, null, 2);
-        }
-      };
-
-      return pc;
-    }
-
-    async function connectToServer() {
-      const answerText = document.getElementById("answerInput").value;
-      let parsed;
-      try {
-        parsed = JSON.parse(answerText);
-      } catch (err) {
-        log("[Error] Invalid JSON in answer.");
-        return;
-      }
-
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(parsed.answer));
-        for (const c of parsed.ice) {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
-        }
-      } catch (err) {
-        log("[Error] " + err.message);
-      }
-    }
-
-    async function start() {
-      createPeerConnection();
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      const iceCandidates = [];
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          iceCandidates.push(e.candidate);
+        } else {
+          document.getElementById('offerOutput').value = JSON.stringify({ offer: pc.localDescription, ice: iceCandidates }, null, 2);
+        }
+      };
     }
 
-    function sendMessage() {
-      const msg = document.getElementById("messageInput").value;
-      const emojiText = msg.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
-      if (dc.readyState === "open") {
-        dc.send(emojiText);
-        log("Me: " + emojiText);
-        document.getElementById("messageInput").value = "";
-      } else {
-        log("[Error] Connection not open.");
+    async function connect() {
+      const data = JSON.parse(document.getElementById('answerInput').value);
+      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
       }
     }
 
-    window.onload = () => {
-      start();
-    };
+    function send() {
+      const msgBox = document.getElementById("msg");
+      const nickname = document.getElementById("nickname").value || "Anonymous";
+      const message = nickname + ": " + msgBox.value;
+      dc.send(message);
+      msgBox.value = "";
+    }
+
+    function disconnect() {
+      if (dc) dc.close();
+      if (pc) pc.close();
+      const chatBox = document.getElementById("chat");
+      chatBox.value += "\nDisconnected.";
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
   </script>
 </body>
 </html>
