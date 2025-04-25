@@ -1,138 +1,160 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>IRC Chat Client</title>
+  <title>IRC Server</title>
   <style>
-    body { font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 20px; }
-    input, textarea { background: #1e1e2e; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
-    textarea { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
-    input { width: calc(100% - 120px); margin-right: 10px; }
-    .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #33334d; color: white; border: none; border-radius: 6px; cursor: pointer; }
-    .btn:hover { background: #4a4a6f; }
-    .system { color: #00afff; font-style: italic; }
+    body { font-family: sans-serif; background: #101010; color: #e0e0e0; padding: 20px; }
+    textarea, input { width: 100%; margin: 6px 0; background: #1a1a1a; color: white; border: 1px solid #555; padding: 8px; border-radius: 5px; }
+    .btn { padding: 6px 12px; background: #333; color: white; border: none; border-radius: 5px; margin: 4px 0; cursor: pointer; }
+    .btn:hover { background: #444; }
   </style>
 </head>
 <body>
-  <h1>IRC Client</h1>
-
-  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br>
-  <label>Channel: <input id="channel" placeholder="#channel or #channel:password" /></label><br><br>
-
-  <h3>Step 1: Generate Offer</h3>
-  <button class="btn" onclick="makeOffer()">Generate Offer</button>
-  <textarea id="offerOutput" rows="10" readonly></textarea>
-
-  <h3>Step 2: Paste Server Answer</h3>
-  <textarea id="answerInput" rows="10" placeholder="Paste server answer here"></textarea><br>
-  <button class="btn" onclick="connect()">Connect</button>
-
-  <h3>Chat</h3>
-  <textarea id="chat" rows="15" readonly></textarea><br>
-  <input id="msg" placeholder="Message..." />
-  <button class="btn" onclick="send()">Send</button>
-  <button class="btn" onclick="disconnect()">Disconnect</button>
+  <h1>IRC Server</h1>
+  <textarea id="offerInput" rows="10" placeholder="Paste client offer here"></textarea>
+  <button class="btn" onclick="acceptConnection()">Accept Connection</button>
+  <textarea id="answerOutput" rows="10" readonly></textarea>
+  <textarea id="log" rows="20" readonly></textarea>
+  <input id="serverMsg" placeholder="Server message..." />
+  <button class="btn" onclick="broadcast()">Send</button>
+  <button class="btn" onclick="disconnectAll()">Disconnect All</button>
 
   <script>
-    let pc, dc, currentChannel = "#general";
+    const peers = [];
+    const channels = {};
+    const roles = new Map();
 
-    async function makeOffer() {
-      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      dc = pc.createDataChannel("chat");
+    const log = msg => {
+      const logBox = document.getElementById("log");
+      logBox.value += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    };
 
-      dc.onmessage = e => {
-        const chatBox = document.getElementById("chat");
-        if (e.data.startsWith("[Private]")) {
-          chatBox.value += e.data + "\n";
-        } else {
-          chatBox.value += e.data + "\n";
-        }
-        chatBox.scrollTop = chatBox.scrollHeight;
+    const privateMessage = (channel, sender, message) => {
+      const peer = peers.find(p => p.nickname === sender && p.channel === channel);
+      if (peer && peer.channel && peer.channel.send) {
+        peer.channel.send("[Private] " + message);
+      }
+    };
+
+    const broadcastToChannel = (channel, message) => {
+      peers.filter(p => p.channel === channel && p.channel.readyState === "open")
+           .forEach(p => p.channel.send(message));
+    };
+
+    async function acceptConnection() {
+      const data = JSON.parse(document.getElementById("offerInput").value);
+      const clientChannel = data.channel || "#general";
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const answerTextarea = document.getElementById('answerOutput');
+      const iceCandidates = [];
+
+      pc.ondatachannel = event => {
+        const dc = event.channel;
+        const nickname = "User" + Math.floor(Math.random() * 10000);
+        const peer = { pc, channel: dc, nickname, room: clientChannel, roles: new Set(["user"]) };
+        peers.push(peer);
+
+        if (!channels[clientChannel]) channels[clientChannel] = { password: null };
+
+        log(`[Server] ${nickname} connected to ${clientChannel}`);
+        broadcastToChannel(clientChannel, `[${clientChannel}] ${nickname} joined.`);
+
+        dc.onmessage = e => {
+          const msg = e.data.trim();
+
+          if (msg.startsWith("/")) {
+            const [command, ...args] = msg.split(" ");
+            const currentRoom = peer.room;
+
+            switch (command) {
+              case "/list":
+                privateMessage(currentRoom, nickname, `Channels: ${Object.keys(channels).join(", ")}`);
+                break;
+              case "/who":
+                const users = peers.filter(p => p.room === currentRoom).map(p => p.nickname);
+                privateMessage(currentRoom, nickname, `Users in ${currentRoom}: ${users.join(", ")}`);
+                break;
+              case "/roles":
+                privateMessage(currentRoom, nickname, `Your roles: ${Array.from(peer.roles).join(", ")}`);
+                break;
+              case "/kick":
+              case "/mute":
+              case "/unmute":
+              case "/promote":
+              case "/ban":
+                if (!peer.roles.has("admin") && !(peer.roles.has("moderator") && command !== "/ban" && command !== "/promote")) {
+                  privateMessage(currentRoom, nickname, "Insufficient permissions.");
+                  return;
+                }
+                const targetName = args[0];
+                const target = peers.find(p => p.nickname === targetName && p.room === currentRoom);
+                if (target) {
+                  if (command === "/kick") {
+                    target.channel.send(`[Private] You were kicked by ${nickname}.`);
+                    target.channel.close();
+                    target.pc.close();
+                    log(`${targetName} was kicked from ${currentRoom}`);
+                  }
+                  if (command === "/mute") target.muted = true;
+                  if (command === "/unmute") target.muted = false;
+                  if (command === "/promote") target.roles.add("moderator");
+                  if (command === "/ban") {
+                    broadcastToChannel(currentRoom, `${targetName} was banned by ${nickname}`);
+                    target.channel.close();
+                    target.pc.close();
+                  }
+                } else {
+                  privateMessage(currentRoom, nickname, `User ${targetName} not found.`);
+                }
+                break;
+              default:
+                privateMessage(currentRoom, nickname, "Unknown command.");
+            }
+          } else if (!peer.muted) {
+            broadcastToChannel(peer.room, `[${peer.room}] ${peer.nickname}: ${msg}`);
+          } else {
+            privateMessage(peer.room, peer.nickname, "You are muted and cannot speak.");
+          }
+        };
       };
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const iceCandidates = [];
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      }
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
       pc.onicecandidate = e => {
         if (e.candidate) {
           iceCandidates.push(e.candidate);
         } else {
-          document.getElementById('offerOutput').value = JSON.stringify({
-            offer: pc.localDescription,
+          answerTextarea.value = JSON.stringify({
+            answer: pc.localDescription,
             ice: iceCandidates,
-            channel: currentChannel
+            channel: clientChannel
           }, null, 2);
         }
       };
     }
 
-    async function connect() {
-      const data = JSON.parse(document.getElementById('answerInput').value);
-      currentChannel = data.channel || "#general";
-      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      for (const c of data.ice) {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      }
+    function broadcast() {
+      const msg = "Server: " + document.getElementById("serverMsg").value;
+      peers.forEach(p => {
+        if (p.channel.readyState === "open") p.channel.send(msg);
+      });
+      log(msg);
+      document.getElementById("serverMsg").value = "";
     }
 
-    function send() {
-      const msgBox = document.getElementById("msg");
-      const nickname = document.getElementById("nickname").value || "Anonymous";
-      const rawMessage = msgBox.value.trim();
-
-      if (rawMessage.startsWith("/")) {
-        const parts = rawMessage.split(" ");
-        const command = parts[0].toLowerCase();
-
-        if (command === "/help") {
-          const helpText = `Available commands:
-/help - show this help message
-/join #channel[:password] - join a channel
-/create #channel[:password] - create a new channel
-/list - list available channels
-/who - show users in the current channel
-/me action - send an action message
-/nick newname - change your nickname
-/kick user - (mod/admin) kick a user
-/ban user - (admin) ban a user
-/promote user - (admin) promote a user to moderator
-/mute user - (mod/admin) mute a user
-/unmute user - (mod/admin) unmute a user
-/roles - list your current roles`;
-          document.getElementById("chat").value += `[Private] ${helpText}\n`;
-        } else if (["/join", "/create"].includes(command) && parts.length >= 2) {
-          currentChannel = parts[1];
-          document.getElementById("channel").value = currentChannel;
-          document.getElementById("chat").value += `[Private] ${command === "/join" ? "Switched to" : "Created and switched to"} channel: ${currentChannel}\n`;
-        } else if (["/list", "/roles"].includes(command)) {
-          dc.send(rawMessage);
-        } else if (command === "/who") {
-          dc.send("/who " + currentChannel);
-        } else if (command === "/me" && parts.length >= 2) {
-          const action = parts.slice(1).join(" ");
-          dc.send(`* ${nickname} ${action}`);
-        } else if (command === "/nick" && parts.length >= 2) {
-          const newNick = parts[1];
-          document.getElementById("nickname").value = newNick;
-          document.getElementById("chat").value += `[Private] Nickname changed to ${newNick}\n`;
-        } else if (["/kick", "/ban", "/promote", "/mute", "/unmute"].includes(command) && parts.length >= 2) {
-          dc.send(rawMessage);
-        } else {
-          document.getElementById("chat").value += `[Private] Unknown command. Type /help for a list.\n`;
-        }
-      } else {
-        const message = `[${currentChannel}] ` + nickname + ": " + rawMessage;
-        dc.send(message);
-      }
-
-      msgBox.value = "";
-    }
-
-    function disconnect() {
-      if (dc) dc.close();
-      if (pc) pc.close();
-      const chatBox = document.getElementById("chat");
-      chatBox.value += "\n[Private] Disconnected.";
-      chatBox.scrollTop = chatBox.scrollHeight;
+    function disconnectAll() {
+      peers.forEach(p => {
+        if (p.channel) p.channel.close();
+        if (p.pc) p.pc.close();
+      });
+      peers.length = 0;
+      log("[Server] All clients disconnected.");
     }
   </script>
 </body>
