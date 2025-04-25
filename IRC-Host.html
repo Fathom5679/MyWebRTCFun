@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head><title>IRC Server</title></head>
+<body>
+  <h1>IRC Server</h1>
+  <h3>Paste Client Offer</h3>
+  <textarea id="offerInput" rows="10" cols="70" placeholder="Paste client offer here"></textarea><br>
+  <button onclick="acceptConnection()">Accept Connection</button>
+  <h3>Send This Answer to Client</h3>
+  <textarea id="answerOutput" rows="10" cols="70" readonly></textarea>
+  <h3>Chat Log</h3>
+  <textarea id="log" rows="15" cols="70" readonly></textarea><br>
+  <input id="serverMsg" placeholder="Server message..." />
+  <button onclick="broadcast()">Send to All</button>
+  <button onclick="disconnectAll()">Disconnect All</button>
+  <script>
+    const peers = [];
+    const log = msg => {
+      const logBox = document.getElementById("log");
+      logBox.value += msg + '\n';
+      logBox.scrollTop = logBox.scrollHeight;
+    };
+    async function acceptConnection() {
+      const data = JSON.parse(document.getElementById('offerInput').value);
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const answerTextarea = document.getElementById('answerOutput');
+      const iceCandidates = [];
+      pc.ondatachannel = event => {
+        const channel = event.channel;
+        log("[Server] New client connected.");
+        peers.push({ pc, channel });
+        channel.onmessage = e => {
+          log(e.data);
+          // Broadcast to everyone
+          peers.forEach(p => {
+            if (p.channel.readyState === "open") {
+              p.channel.send(e.data);
+            }
+          });
+        };
+      };
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          iceCandidates.push(e.candidate);
+        } else {
+          answerTextarea.value = JSON.stringify({
+            answer: pc.localDescription,
+            ice: iceCandidates
+          }, null, 2);
+        }
+      };
+    }
+    function broadcast() {
+      const msg = "Server: " + document.getElementById("serverMsg").value;
+      peers.forEach(p => {
+        if (p.channel.readyState === "open") {
+          p.channel.send(msg);
+        }
+      });
+      log(msg);
+      document.getElementById("serverMsg").value = "";
+    }
+    function disconnectAll() {
+      peers.forEach(p => {
+        if (p.channel) p.channel.close();
+        if (p.pc) p.pc.close();
+      });
+      peers.length = 0;
+      log("[Server] All clients disconnected.");
+    }
+  </script>
+</body>
+</html>
+
