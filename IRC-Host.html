@@ -1,259 +1,138 @@
 <!DOCTYPE html>
 <html>
-<head><title>IRC Server</title></head>
+<head>
+  <title>IRC Chat Client</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 20px; }
+    input, textarea { background: #1e1e2e; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+    textarea { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+    input { width: calc(100% - 120px); margin-right: 10px; }
+    .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #33334d; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    .btn:hover { background: #4a4a6f; }
+    .system { color: #00afff; font-style: italic; }
+  </style>
+</head>
 <body>
-  <h1>IRC Server</h1>
-  <h3>Paste Client Offer</h3>
-  <textarea id="offerInput" rows="10" cols="70" placeholder="Paste client offer here"></textarea><br>
-  <button onclick="acceptConnection()">Accept Connection</button>
-  <h3>Send This Answer to Client</h3>
-  <textarea id="answerOutput" rows="10" cols="70" readonly></textarea>
-  <h3>Chat Log</h3>
-  <textarea id="log" rows="15" cols="70" readonly></textarea><br>
-  <input id="serverMsg" placeholder="Server message..." />
-  <button onclick="broadcast()">Send to All</button>
-  <button onclick="disconnectAll()">Disconnect All</button>
+  <h1>IRC Client</h1>
+
+  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br>
+  <label>Channel: <input id="channel" placeholder="#channel or #channel:password" /></label><br><br>
+
+  <h3>Step 1: Generate Offer</h3>
+  <button class="btn" onclick="makeOffer()">Generate Offer</button>
+  <textarea id="offerOutput" rows="10" readonly></textarea>
+
+  <h3>Step 2: Paste Server Answer</h3>
+  <textarea id="answerInput" rows="10" placeholder="Paste server answer here"></textarea><br>
+  <button class="btn" onclick="connect()">Connect</button>
+
+  <h3>Chat</h3>
+  <textarea id="chat" rows="15" readonly></textarea><br>
+  <input id="msg" placeholder="Message..." />
+  <button class="btn" onclick="send()">Send</button>
+  <button class="btn" onclick="disconnect()">Disconnect</button>
+
   <script>
-    const peers = [];
-    const channels = { general: { users: [], password: null, roles: {}, muted: [] } };
-    const userMap = new Map();
+    let pc, dc, currentChannel = "#general";
 
-    const log = msg => {
-      const logBox = document.getElementById("log");
-      logBox.value += msg + '\n';
-      logBox.scrollTop = logBox.scrollHeight;
-    };
+    async function makeOffer() {
+      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      dc = pc.createDataChannel("chat");
 
-    function broadcastTo(channelName, msg, sender = null) {
-      if (!channels[channelName]) return;
-      channels[channelName].users.forEach(p => {
-        if (p.channel.readyState === "open") {
-          p.channel.send(sender ? `${sender}: ${msg}` : msg);
+      dc.onmessage = e => {
+        const chatBox = document.getElementById("chat");
+        if (e.data.startsWith("[Private]")) {
+          chatBox.value += e.data + "\n";
+        } else {
+          chatBox.value += e.data + "\n";
         }
-      });
-    }
-
-    async function acceptConnection() {
-      const data = JSON.parse(document.getElementById('offerInput').value);
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      const answerTextarea = document.getElementById('answerOutput');
-      const iceCandidates = [];
-
-      pc.ondatachannel = event => {
-        const channel = event.channel;
-        const user = { pc, channel, name: "Anonymous", currentChannel: "general", role: "user" };
-
-        if (!channels.general.users.includes(user)) channels.general.users.push(user);
-        peers.push(user);
-
-        log("[Server] New client connected.");
-
-        channel.onmessage = e => {
-          const text = e.data.trim();
-
-          if (text.startsWith("/")) {
-            const [command, ...args] = text.split(" ");
-            switch (command) {
-              case "/nick":
-                user.name = args.join(" ") || "Anonymous";
-                channel.send(`[Server] Your nickname is now ${user.name}`);
-                break;
-              case "/ping":
-                channel.send("[Server] Pong!");
-                break;
-              case "/who":
-                const members = channels[user.currentChannel].users.map(p => `${p.name} (${p.role})`).join(", ");
-                channel.send("[Server] Users in channel: " + members);
-                break;
-              case "/time":
-                channel.send("[Server] Server time: " + new Date().toLocaleTimeString());
-                break;
-              case "/join": {
-                const chanName = args[0];
-                const providedPass = args[1] || null;
-                if (!chanName) {
-                  channel.send("[Server] Usage: /join <channel> [password]");
-                  return;
-                }
-                if (!channels[chanName]) {
-                  channel.send(`[Server] Channel ${chanName} does not exist.`);
-                  return;
-                }
-                if (channels[chanName].password && channels[chanName].password !== providedPass) {
-                  channel.send("[Server] Incorrect password.");
-                  return;
-                }
-                const oldChannel = user.currentChannel;
-                channels[oldChannel].users = channels[oldChannel].users.filter(p => p !== user);
-                user.currentChannel = chanName;
-                channels[chanName].users.push(user);
-                channel.send(`[Server] You joined channel ${chanName}`);
-                break;
-              }
-              case "/create": {
-                const newChan = args[0];
-                const newPass = args[1] || null;
-                if (!newChan) {
-                  channel.send("[Server] Usage: /create <channel> [password]");
-                  return;
-                }
-                if (channels[newChan]) {
-                  channel.send("[Server] Channel already exists.");
-                } else {
-                  channels[newChan] = { users: [user], password: newPass, roles: { [user.name]: "admin" }, muted: [] };
-                  const oldChannel = user.currentChannel;
-                  channels[oldChannel].users = channels[oldChannel].users.filter(p => p !== user);
-                  user.currentChannel = newChan;
-                  user.role = "admin";
-                  channel.send(`[Server] Created and joined channel ${newChan} as admin`);
-                }
-                break;
-              }
-              case "/showpass": {
-                const chan = user.currentChannel;
-                if (channels[chan].roles[user.name] === "admin") {
-                  channel.send(`[Server] Password for ${chan}: ${channels[chan].password || "(none)"}`);
-                } else {
-                  channel.send("[Server] Only admins can view the channel password.");
-                }
-                break;
-              }
-              case "/setrole": {
-                const [target, newRole] = args;
-                const chan = user.currentChannel;
-                if (channels[chan].roles[user.name] !== "admin") {
-                  channel.send("[Server] Only admins can assign roles.");
-                  return;
-                }
-                const targetUser = channels[chan].users.find(p => p.name === target);
-                if (targetUser) {
-                  channels[chan].roles[target] = newRole;
-                  targetUser.role = newRole;
-                  channel.send(`[Server] Set role of ${target} to ${newRole}`);
-                } else {
-                  channel.send("[Server] User not found in channel.");
-                }
-                break;
-              }
-              case "/mute": {
-                const target = args[0];
-                const chan = user.currentChannel;
-                if (!["admin", "moderator"].includes(channels[chan].roles[user.name])) {
-                  channel.send("[Server] Only admins or moderators can mute.");
-                  return;
-                }
-                if (!channels[chan].muted.includes(target)) {
-                  channels[chan].muted.push(target);
-                  channel.send(`[Server] ${target} has been muted.`);
-                }
-                break;
-              }
-              case "/unmute": {
-                const target = args[0];
-                const chan = user.currentChannel;
-                const index = channels[chan].muted.indexOf(target);
-                if (index !== -1) {
-                  channels[chan].muted.splice(index, 1);
-                  channel.send(`[Server] ${target} has been unmuted.`);
-                }
-                break;
-              }
-              case "/kick": {
-                const target = args[0];
-                const chan = user.currentChannel;
-                if (!["admin", "moderator"].includes(channels[chan].roles[user.name])) {
-                  channel.send("[Server] Only admins or moderators can kick.");
-                  return;
-                }
-                const targetUser = channels[chan].users.find(p => p.name === target);
-                if (targetUser) {
-                  targetUser.channel.close();
-                  channels[chan].users = channels[chan].users.filter(p => p !== targetUser);
-                  channel.send(`[Server] ${target} has been kicked.`);
-                }
-                break;
-              }
-              case "/help":
-                channel.send(`[Server] Commands: /ping, /who, /help, /time, /nick <name>, /join <channel> [password], /create <channel> [password], /showpass, /setrole <user> <role>, /mute <user>, /unmute <user>, /kick <user>, /exportlog, /importlog <base64>`);
-                break;
-              case "/exportlog": {
-                const logText = document.getElementById("log").value;
-                const base64 = btoa(unescape(encodeURIComponent(logText)));
-                channel.send("[Server] Exported log (base64): " + base64);
-                break;
-              }
-              case "/importlog": {
-                const base64 = args[0];
-                if (!base64) {
-                  channel.send("[Server] Usage: /importlog <base64>");
-                  return;
-                }
-                try {
-                  const logText = decodeURIComponent(escape(atob(base64)));
-                  document.getElementById("log").value = logText;
-                  channel.send("[Server] Log imported.");
-                } catch {
-                  channel.send("[Server] Failed to import log.");
-                }
-                break;
-              }
-              default:
-                channel.send("[Server] Unknown command. Type /help");
-            }
-            return;
-          }
-
-          const chan = user.currentChannel;
-          if (channels[chan].muted.includes(user.name)) {
-            channel.send("[Server] You are muted and cannot send messages.");
-            return;
-          }
-
-          broadcastTo(chan, text, user.name);
-          log(`${user.name}@${chan}: ${text}`);
-        };
+        chatBox.scrollTop = chatBox.scrollHeight;
       };
 
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-      for (const c of data.ice) {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      }
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const iceCandidates = [];
       pc.onicecandidate = e => {
         if (e.candidate) {
           iceCandidates.push(e.candidate);
         } else {
-          answerTextarea.value = JSON.stringify({
-            answer: pc.localDescription,
-            ice: iceCandidates
+          document.getElementById('offerOutput').value = JSON.stringify({
+            offer: pc.localDescription,
+            ice: iceCandidates,
+            channel: currentChannel
           }, null, 2);
         }
       };
     }
 
-    function broadcast() {
-      const msg = "Server: " + document.getElementById("serverMsg").value;
-      Object.values(channels).forEach(chan => {
-        chan.users.forEach(p => {
-          if (p.channel.readyState === "open") {
-            p.channel.send(msg);
-          }
-        });
-      });
-      log(msg);
-      document.getElementById("serverMsg").value = "";
+    async function connect() {
+      const data = JSON.parse(document.getElementById('answerInput').value);
+      currentChannel = data.channel || "#general";
+      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      }
     }
 
-    function disconnectAll() {
-      peers.forEach(p => {
-        if (p.channel) p.channel.close();
-        if (p.pc) p.pc.close();
-      });
-      Object.values(channels).forEach(chan => chan.users = []);
-      peers.length = 0;
-      log("[Server] All clients disconnected.");
+    function send() {
+      const msgBox = document.getElementById("msg");
+      const nickname = document.getElementById("nickname").value || "Anonymous";
+      const rawMessage = msgBox.value.trim();
+
+      if (rawMessage.startsWith("/")) {
+        const parts = rawMessage.split(" ");
+        const command = parts[0].toLowerCase();
+
+        if (command === "/help") {
+          const helpText = `Available commands:
+/help - show this help message
+/join #channel[:password] - join a channel
+/create #channel[:password] - create a new channel
+/list - list available channels
+/who - show users in the current channel
+/me action - send an action message
+/nick newname - change your nickname
+/kick user - (mod/admin) kick a user
+/ban user - (admin) ban a user
+/promote user - (admin) promote a user to moderator
+/mute user - (mod/admin) mute a user
+/unmute user - (mod/admin) unmute a user
+/roles - list your current roles`;
+          document.getElementById("chat").value += `[Private] ${helpText}\n`;
+        } else if (["/join", "/create"].includes(command) && parts.length >= 2) {
+          currentChannel = parts[1];
+          document.getElementById("channel").value = currentChannel;
+          document.getElementById("chat").value += `[Private] ${command === "/join" ? "Switched to" : "Created and switched to"} channel: ${currentChannel}\n`;
+        } else if (["/list", "/roles"].includes(command)) {
+          dc.send(rawMessage);
+        } else if (command === "/who") {
+          dc.send("/who " + currentChannel);
+        } else if (command === "/me" && parts.length >= 2) {
+          const action = parts.slice(1).join(" ");
+          dc.send(`* ${nickname} ${action}`);
+        } else if (command === "/nick" && parts.length >= 2) {
+          const newNick = parts[1];
+          document.getElementById("nickname").value = newNick;
+          document.getElementById("chat").value += `[Private] Nickname changed to ${newNick}\n`;
+        } else if (["/kick", "/ban", "/promote", "/mute", "/unmute"].includes(command) && parts.length >= 2) {
+          dc.send(rawMessage);
+        } else {
+          document.getElementById("chat").value += `[Private] Unknown command. Type /help for a list.\n`;
+        }
+      } else {
+        const message = `[${currentChannel}] ` + nickname + ": " + rawMessage;
+        dc.send(message);
+      }
+
+      msgBox.value = "";
+    }
+
+    function disconnect() {
+      if (dc) dc.close();
+      if (pc) pc.close();
+      const chatBox = document.getElementById("chat");
+      chatBox.value += "\n[Private] Disconnected.";
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
   </script>
 </body>
