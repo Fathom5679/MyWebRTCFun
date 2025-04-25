@@ -15,11 +15,23 @@
   <button onclick="disconnectAll()">Disconnect All</button>
   <script>
     const peers = [];
+    const channels = { general: { users: [], password: null, roles: {}, muted: [] } };
+    const userMap = new Map();
+
     const log = msg => {
       const logBox = document.getElementById("log");
       logBox.value += msg + '\n';
       logBox.scrollTop = logBox.scrollHeight;
     };
+
+    function broadcastTo(channelName, msg, sender = null) {
+      if (!channels[channelName]) return;
+      channels[channelName].users.forEach(p => {
+        if (p.channel.readyState === "open") {
+          p.channel.send(sender ? `${sender}: ${msg}` : msg);
+        }
+      });
+    }
 
     async function acceptConnection() {
       const data = JSON.parse(document.getElementById('offerInput').value);
@@ -29,39 +41,176 @@
 
       pc.ondatachannel = event => {
         const channel = event.channel;
+        const user = { pc, channel, name: "Anonymous", currentChannel: "general", role: "user" };
+
+        if (!channels.general.users.includes(user)) channels.general.users.push(user);
+        peers.push(user);
+
         log("[Server] New client connected.");
-        peers.push({ pc, channel });
 
         channel.onmessage = e => {
-          const msg = e.data;
-          log(msg);
+          const text = e.data.trim();
 
-          // Command handling
-          if (msg.startsWith("/")) {
-            const command = msg.split(" ")[0];
+          if (text.startsWith("/")) {
+            const [command, ...args] = text.split(" ");
             switch (command) {
+              case "/nick":
+                user.name = args.join(" ") || "Anonymous";
+                channel.send(`[Server] Your nickname is now ${user.name}`);
+                break;
               case "/ping":
                 channel.send("[Server] Pong!");
-                return;
+                break;
               case "/who":
-                const users = peers.map((p, i) => `User${i + 1}`).join(", ");
-                channel.send("[Server] Connected users: " + users);
-                return;
-              case "/help":
-                channel.send("[Server] Commands: /ping, /who, /help, /time");
-                return;
+                const members = channels[user.currentChannel].users.map(p => `${p.name} (${p.role})`).join(", ");
+                channel.send("[Server] Users in channel: " + members);
+                break;
               case "/time":
                 channel.send("[Server] Server time: " + new Date().toLocaleTimeString());
-                return;
+                break;
+              case "/join": {
+                const chanName = args[0];
+                const providedPass = args[1] || null;
+                if (!chanName) {
+                  channel.send("[Server] Usage: /join <channel> [password]");
+                  return;
+                }
+                if (!channels[chanName]) {
+                  channel.send(`[Server] Channel ${chanName} does not exist.`);
+                  return;
+                }
+                if (channels[chanName].password && channels[chanName].password !== providedPass) {
+                  channel.send("[Server] Incorrect password.");
+                  return;
+                }
+                const oldChannel = user.currentChannel;
+                channels[oldChannel].users = channels[oldChannel].users.filter(p => p !== user);
+                user.currentChannel = chanName;
+                channels[chanName].users.push(user);
+                channel.send(`[Server] You joined channel ${chanName}`);
+                break;
+              }
+              case "/create": {
+                const newChan = args[0];
+                const newPass = args[1] || null;
+                if (!newChan) {
+                  channel.send("[Server] Usage: /create <channel> [password]");
+                  return;
+                }
+                if (channels[newChan]) {
+                  channel.send("[Server] Channel already exists.");
+                } else {
+                  channels[newChan] = { users: [user], password: newPass, roles: { [user.name]: "admin" }, muted: [] };
+                  const oldChannel = user.currentChannel;
+                  channels[oldChannel].users = channels[oldChannel].users.filter(p => p !== user);
+                  user.currentChannel = newChan;
+                  user.role = "admin";
+                  channel.send(`[Server] Created and joined channel ${newChan} as admin`);
+                }
+                break;
+              }
+              case "/showpass": {
+                const chan = user.currentChannel;
+                if (channels[chan].roles[user.name] === "admin") {
+                  channel.send(`[Server] Password for ${chan}: ${channels[chan].password || "(none)"}`);
+                } else {
+                  channel.send("[Server] Only admins can view the channel password.");
+                }
+                break;
+              }
+              case "/setrole": {
+                const [target, newRole] = args;
+                const chan = user.currentChannel;
+                if (channels[chan].roles[user.name] !== "admin") {
+                  channel.send("[Server] Only admins can assign roles.");
+                  return;
+                }
+                const targetUser = channels[chan].users.find(p => p.name === target);
+                if (targetUser) {
+                  channels[chan].roles[target] = newRole;
+                  targetUser.role = newRole;
+                  channel.send(`[Server] Set role of ${target} to ${newRole}`);
+                } else {
+                  channel.send("[Server] User not found in channel.");
+                }
+                break;
+              }
+              case "/mute": {
+                const target = args[0];
+                const chan = user.currentChannel;
+                if (!["admin", "moderator"].includes(channels[chan].roles[user.name])) {
+                  channel.send("[Server] Only admins or moderators can mute.");
+                  return;
+                }
+                if (!channels[chan].muted.includes(target)) {
+                  channels[chan].muted.push(target);
+                  channel.send(`[Server] ${target} has been muted.`);
+                }
+                break;
+              }
+              case "/unmute": {
+                const target = args[0];
+                const chan = user.currentChannel;
+                const index = channels[chan].muted.indexOf(target);
+                if (index !== -1) {
+                  channels[chan].muted.splice(index, 1);
+                  channel.send(`[Server] ${target} has been unmuted.`);
+                }
+                break;
+              }
+              case "/kick": {
+                const target = args[0];
+                const chan = user.currentChannel;
+                if (!["admin", "moderator"].includes(channels[chan].roles[user.name])) {
+                  channel.send("[Server] Only admins or moderators can kick.");
+                  return;
+                }
+                const targetUser = channels[chan].users.find(p => p.name === target);
+                if (targetUser) {
+                  targetUser.channel.close();
+                  channels[chan].users = channels[chan].users.filter(p => p !== targetUser);
+                  channel.send(`[Server] ${target} has been kicked.`);
+                }
+                break;
+              }
+              case "/help":
+                channel.send(`[Server] Commands: /ping, /who, /help, /time, /nick <name>, /join <channel> [password], /create <channel> [password], /showpass, /setrole <user> <role>, /mute <user>, /unmute <user>, /kick <user>, /exportlog, /importlog <base64>`);
+                break;
+              case "/exportlog": {
+                const logText = document.getElementById("log").value;
+                const base64 = btoa(unescape(encodeURIComponent(logText)));
+                channel.send("[Server] Exported log (base64): " + base64);
+                break;
+              }
+              case "/importlog": {
+                const base64 = args[0];
+                if (!base64) {
+                  channel.send("[Server] Usage: /importlog <base64>");
+                  return;
+                }
+                try {
+                  const logText = decodeURIComponent(escape(atob(base64)));
+                  document.getElementById("log").value = logText;
+                  channel.send("[Server] Log imported.");
+                } catch {
+                  channel.send("[Server] Failed to import log.");
+                }
+                break;
+              }
+              default:
+                channel.send("[Server] Unknown command. Type /help");
             }
+            return;
           }
 
-          // Broadcast normal messages
-          peers.forEach(p => {
-            if (p.channel.readyState === "open") {
-              p.channel.send(msg);
-            }
-          });
+          const chan = user.currentChannel;
+          if (channels[chan].muted.includes(user.name)) {
+            channel.send("[Server] You are muted and cannot send messages.");
+            return;
+          }
+
+          broadcastTo(chan, text, user.name);
+          log(`${user.name}@${chan}: ${text}`);
         };
       };
 
@@ -86,10 +235,12 @@
 
     function broadcast() {
       const msg = "Server: " + document.getElementById("serverMsg").value;
-      peers.forEach(p => {
-        if (p.channel.readyState === "open") {
-          p.channel.send(msg);
-        }
+      Object.values(channels).forEach(chan => {
+        chan.users.forEach(p => {
+          if (p.channel.readyState === "open") {
+            p.channel.send(msg);
+          }
+        });
       });
       log(msg);
       document.getElementById("serverMsg").value = "";
@@ -100,6 +251,7 @@
         if (p.channel) p.channel.close();
         if (p.pc) p.pc.close();
       });
+      Object.values(channels).forEach(chan => chan.users = []);
       peers.length = 0;
       log("[Server] All clients disconnected.");
     }
