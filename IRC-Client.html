@@ -14,7 +14,9 @@
 <body>
   <h1>IRC Client</h1>
 
-  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br><br>
+  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br>
+  <label>Channel: <input id="channel" placeholder="#channel or #channel:password" /></label><br><br>
+
   <h3>Step 1: Generate Offer</h3>
   <button class="btn" onclick="makeOffer()">Generate Offer</button>
   <textarea id="offerOutput" rows="10" readonly></textarea>
@@ -30,7 +32,7 @@
   <button class="btn" onclick="disconnect()">Disconnect</button>
 
   <script>
-    let pc, dc;
+    let pc, dc, currentChannel = "#general";
 
     async function makeOffer() {
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
@@ -49,13 +51,18 @@
         if (e.candidate) {
           iceCandidates.push(e.candidate);
         } else {
-          document.getElementById('offerOutput').value = JSON.stringify({ offer: pc.localDescription, ice: iceCandidates }, null, 2);
+          document.getElementById('offerOutput').value = JSON.stringify({
+            offer: pc.localDescription,
+            ice: iceCandidates,
+            channel: currentChannel
+          }, null, 2);
         }
       };
     }
 
     async function connect() {
       const data = JSON.parse(document.getElementById('answerInput').value);
+      currentChannel = data.channel || "#general";
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
       for (const c of data.ice) {
         await pc.addIceCandidate(new RTCIceCandidate(c));
@@ -68,15 +75,25 @@
       const rawMessage = msgBox.value.trim();
 
       if (rawMessage.startsWith("/")) {
-        const command = rawMessage.toLowerCase();
+        const parts = rawMessage.split(" ");
+        const command = parts[0].toLowerCase();
+
         if (command === "/help") {
-          const helpText = "Available commands:\n/help - show this help message";
+          const helpText = "Available commands:\n/help - show this help message\n/join #channel[:password] - join a channel\n/create #channel[:password] - create a new channel";
           document.getElementById("chat").value += helpText + "\n";
+        } else if (command === "/join" && parts.length >= 2) {
+          currentChannel = parts[1];
+          document.getElementById("channel").value = currentChannel;
+          document.getElementById("chat").value += `Switched to channel: ${currentChannel}\n`;
+        } else if (command === "/create" && parts.length >= 2) {
+          currentChannel = parts[1];
+          document.getElementById("channel").value = currentChannel;
+          document.getElementById("chat").value += `Created and switched to channel: ${currentChannel}\n`;
         } else {
           document.getElementById("chat").value += "Unknown command. Type /help for a list.\n";
         }
       } else {
-        const message = nickname + ": " + rawMessage;
+        const message = `[${currentChannel}] ` + nickname + ": " + rawMessage;
         dc.send(message);
       }
 
