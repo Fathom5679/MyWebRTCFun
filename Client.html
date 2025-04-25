@@ -34,7 +34,8 @@
 
   <button onclick="send()">Send</button>
 
-
+  <h3>Disconnect</h3>
+  <button onclick="disconnect()">Disconnect</button>
 
   <script>
 
@@ -117,6 +118,21 @@
       document.getElementById("msg").value = "";
 
     }
+
+    function disconnect() {
+if (dc) {
+dc.close(); // Close the data channel
+log("Data channel closed.");
+}
+
+if (pc) {
+pc.close(); // Close the peer connection
+log("Peer connection closed.");
+}
+
+// Optionally, you can clear the chat area or notify the user
+document.getElementById('chat').value += "\nDisconnected from server.";
+}
 
   </script>
 
