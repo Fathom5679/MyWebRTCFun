@@ -1,109 +1,81 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
   <title>IRC Server</title>
   <style>
     body { font-family: sans-serif; background: #1e1e2f; color: #f0f0f0; margin: 20px; }
-    h1 { color: #82aaff; }
     textarea, input { background: #2d2d3a; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
-    #log { width: 100%; height: 300px; overflow-y: scroll; }
-    input, textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
-    .btn { margin-right: 5px; margin-bottom: 10px; padding: 5px 10px; background: #3a3a4f; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    textarea { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+    input { width: calc(100% - 120px); margin-right: 10px; }
+    .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #3a3a4f; color: white; border: none; border-radius: 6px; cursor: pointer; }
     .btn:hover { background: #50506f; }
   </style>
 </head>
 <body>
   <h1>IRC Server</h1>
-  <textarea id="offerInput" rows="6" placeholder="Paste client offer here..."></textarea>
+  <h3>Paste Client Offer</h3>
+  <textarea id="offerInput" rows="6" placeholder="Paste client offer here"></textarea><br>
   <button class="btn" onclick="acceptConnection()">Accept Connection</button>
-  <textarea id="answerOutput" rows="6" readonly placeholder="Send this answer to client..."></textarea>
+
+  <h3>Send This Answer to Client</h3>
+  <textarea id="answerOutput" rows="6" readonly></textarea>
 
   <h3>Chat Log</h3>
-  <textarea id="log" readonly></textarea>
+  <textarea id="log" rows="15" readonly></textarea><br>
   <input id="serverMsg" placeholder="Server message...">
   <button class="btn" onclick="broadcast()">Send to All</button>
   <button class="btn" onclick="disconnectAll()">Disconnect All</button>
 
   <h3>Log Controls</h3>
-  <button class="btn" onclick="exportLog()">Export Chat Log</button>
-  <input type="file" id="importLogFile" accept=".txt" />
-  <button class="btn" onclick="importLog()">Import Log</button>
+  <button class="btn" onclick="exportLogs()">Export Chat Log</button>
+  <input type="file" id="importLogFile" onchange="importLogs(event)" />
 
   <script>
     const peers = [];
-    const roles = {};
     const channels = { "#general": [] };
-    const passwords = {}; // channel passwords
-    const logArea = document.getElementById("log");
-    let chatHistory = [];
+    const roles = new Map();
+    const passwords = {};
+    const channelTopics = {};
+    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
+    const chatHistory = [];
+    const wsPlaceholder = null; // Placeholder for future WebSocket signaling
 
     const log = msg => {
-      logArea.value += msg + "\n";
-      logArea.scrollTop = logArea.scrollHeight;
+      const logBox = document.getElementById("log");
+      logBox.value += msg + '\n';
+      logBox.scrollTop = logBox.scrollHeight;
       chatHistory.push(msg);
     };
 
-    function sendToPeer(peer, msg) {
-      if (peer.channel.readyState === "open") peer.channel.send(msg);
-    }
-
-    function broadcastToChannel(channel, msg) {
-      (channels[channel] || []).forEach(p => sendToPeer(p, msg));
-    }
-
-    function hasRole(peer, role) {
-      return roles[peer.nickname] === role || roles[peer.nickname] === "admin";
-    }
-
-    async function acceptConnection() {
-      const data = JSON.parse(document.getElementById("offerInput").value);
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      const iceCandidates = [];
-      const answerTextarea = document.getElementById("answerOutput");
-
-      pc.ondatachannel = event => {
-        const channel = event.channel;
-        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general" };
-        channels["#general"].push(peer);
-        roles[peer.nickname] = "user";
-        peers.push(peer);
-        log(`[Server] ${peer.nickname} connected.`);
-
-        channel.onmessage = e => handleMessage(peer, e.data);
-        channel.onclose = () => {
-          removePeer(peer);
-          log(`[Server] ${peer.nickname} disconnected.`);
-        };
-      };
-
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-      for (const c of data.ice) {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
+    const sendToPeer = (peer, msg) => {
+      if (peer.channel.readyState === "open") {
+        peer.channel.send(msg);
       }
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      pc.onicecandidate = e => {
-        if (e.candidate) iceCandidates.push(e.candidate);
-        else {
-          answerTextarea.value = JSON.stringify({
-            answer: pc.localDescription,
-            ice: iceCandidates
-          }, null, 2);
-        }
-      };
-    }
+    };
 
-    function handleMessage(peer, msg) {
-      if (msg.startsWith("/")) {
-        const [cmd, ...args] = msg.slice(1).split(" ");
-        const command = cmd.toLowerCase();
+    const broadcastToChannel = (channel, msg) => {
+      channels[channel]?.forEach(p => sendToPeer(p, msg));
+    };
+
+    const switchChannel = (peer, channel) => {
+      if (!channels[channel]) channels[channel] = [];
+      if (peer.currentChannel) {
+        channels[peer.currentChannel] = channels[peer.currentChannel].filter(p => p !== peer);
+      }
+      channels[channel].push(peer);
+      peer.currentChannel = channel;
+    };
+
+    function handleMessage(peer, text) {
+      if (text.startsWith("/")) {
+        const parts = text.slice(1).split(" ");
+        const command = parts[0].toLowerCase();
+        const args = parts.slice(1);
+
         switch (command) {
           case "nick":
-            const oldNick = peer.nickname;
-            peer.nickname = args[0] || "Anonymous";
-            roles[peer.nickname] = roles[oldNick] || "user";
-            log(`[Server] ${oldNick} is now ${peer.nickname}`);
+            peer.nickname = args[0];
+            sendToPeer(peer, `[Server] Nickname set to ${peer.nickname}`);
             break;
 
           case "join":
@@ -117,6 +89,47 @@
             }
             break;
 
+          case "list":
+            const chList = Object.keys(channels).map(c => `${c} (${channels[c].length} users)`).join("\n- ");
+            sendToPeer(peer, `[Server] Available channels:\n- ${chList}`);
+            break;
+
+          case "topic":
+            const [channelName, ...topicParts] = args;
+            if (!channelName || !channels[channelName]) {
+              sendToPeer(peer, `[Server] Channel does not exist.`);
+              break;
+            }
+            if (topicParts.length === 0) {
+              const t = channelTopics[channelName] || "No topic set.";
+              sendToPeer(peer, `[Server] Topic for ${channelName}: "${t}"`);
+            } else {
+              const role = roles.get(peer.channel) || "user";
+              if (role === "admin" || role === "mod") {
+                channelTopics[channelName] = topicParts.join(" ");
+                broadcastToChannel(channelName, `[Server] Topic for ${channelName} set to: "${channelTopics[channelName]}"`);
+              } else {
+                sendToPeer(peer, `[Server] You don’t have permission to set topics.`);
+              }
+            }
+            break;
+
+          case "role":
+            if (roles.get(peer.channel) !== "admin") {
+              sendToPeer(peer, `[Server] Only admin can assign roles.`);
+              break;
+            }
+            const [targetNick, newRole] = args;
+            const targetPeer = peers.find(p => p.nickname === targetNick);
+            if (targetPeer && ["admin", "mod", "user"].includes(newRole)) {
+              roles.set(targetPeer.channel, newRole);
+              sendToPeer(peer, `[Server] Set role of ${targetNick} to ${newRole}`);
+              sendToPeer(targetPeer, `[Server] Your role is now ${newRole}`);
+            } else {
+              sendToPeer(peer, `[Server] Invalid target or role.`);
+            }
+            break;
+
           case "msg":
             const [target, ...msgParts] = args;
             const targetPeer = peers.find(p => p.nickname === target);
@@ -126,59 +139,55 @@
             }
             break;
 
-          case "kick":
-            if (hasRole(peer, "mod")) {
-              const kickTarget = peers.find(p => p.nickname === args[0]);
-              if (kickTarget) {
-                sendToPeer(kickTarget, "[Server] You were kicked.");
-                kickTarget.channel.close();
-                removePeer(kickTarget);
-              }
-            } else sendToPeer(peer, "[Server] You lack permission to /kick");
-            break;
-
-          case "setrole":
-            if (roles[peer.nickname] === "admin") {
-              const [user, role] = args;
-              if (["mod", "user"].includes(role)) {
-                roles[user] = role;
-                sendToPeer(peer, `[Server] ${user} set to ${role}`);
-              }
-            }
-            break;
-
           case "help":
-            let helpText = `Available commands:\n`;
-            helpText += `/nick <name>\n/join <#channel> [pass]\n/msg <user> <msg>\n/help\n`;
-            if (hasRole(peer, "mod")) helpText += `/kick <user>\n`;
-            if (roles[peer.nickname] === "admin") helpText += `/setrole <user> <role>\n`;
+            const role = roles.get(peer.channel) || "user";
+            let helpText = "[Server] Available commands:\n/nick [name]\n/join [#channel] [password]\n/list\n/topic [#channel] [topic]\n/msg [user] [msg]\n/help";
+            if (role === "admin") helpText += "\n/role [nickname] [admin|mod|user]";
             sendToPeer(peer, helpText);
             break;
 
           default:
-            sendToPeer(peer, `[Server] Unknown command: ${command}`);
+            sendToPeer(peer, `[Server] Unknown command: /${command}`);
         }
       } else {
-        const emojiMsg = msg.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
-        const full = `[${peer.currentChannel}] ${peer.nickname}: ${emojiMsg}`;
-        log(full);
-        broadcastToChannel(peer.currentChannel, full);
+        const emojiMsg = text.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
+        const formatted = `${peer.nickname || "Anonymous"} (${peer.currentChannel}): ${emojiMsg}`;
+        log(formatted);
+        broadcastToChannel(peer.currentChannel, formatted);
         new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
       }
     }
 
-    function switchChannel(peer, channel) {
-      channels[peer.currentChannel] = channels[peer.currentChannel].filter(p => p !== peer);
-      if (!channels[channel]) channels[channel] = [];
-      channels[channel].push(peer);
-      peer.currentChannel = channel;
-    }
+    async function acceptConnection() {
+      const data = JSON.parse(document.getElementById('offerInput').value);
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const answerTextarea = document.getElementById('answerOutput');
+      const iceCandidates = [];
 
-    function removePeer(peer) {
-      peers.splice(peers.indexOf(peer), 1);
-      if (channels[peer.currentChannel]) {
-        channels[peer.currentChannel] = channels[peer.currentChannel].filter(p => p !== peer);
+      pc.ondatachannel = event => {
+        const channel = event.channel;
+        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general" };
+        roles.set(channel, "user");
+        switchChannel(peer, "#general");
+        peers.push(peer);
+        log("[Server] New client connected.");
+
+        channel.onmessage = e => handleMessage(peer, e.data);
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      for (const c of data.ice) {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
       }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          iceCandidates.push(e.candidate);
+        } else {
+          answerTextarea.value = JSON.stringify({ answer: pc.localDescription, ice: iceCandidates }, null, 2);
+        }
+      };
     }
 
     function broadcast() {
@@ -197,33 +206,26 @@
       log("[Server] All clients disconnected.");
     }
 
-    function exportLog() {
+    function exportLogs() {
       const blob = new Blob([chatHistory.join("\n")], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+      a.href = url;
       a.download = "chat_log.txt";
       a.click();
+      URL.revokeObjectURL(url);
     }
 
-    function importLog() {
-      const file = document.getElementById("importLogFile").files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const lines = reader.result.split("\n");
-          lines.forEach(line => log(line));
-        };
-        reader.readAsText(file);
-      }
+    function importLogs(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const lines = e.target.result.split("\n");
+        lines.forEach(line => log(line));
+      };
+      reader.readAsText(file);
     }
-
-    const emojiMap = {
-      smile: "😄",
-      fire: "🔥",
-      wave: "👋",
-      heart: "❤️",
-      thumbsup: "👍"
-    };
   </script>
 </body>
 </html>
