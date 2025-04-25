@@ -31,11 +31,35 @@
         const channel = event.channel;
         log("[Server] New client connected.");
         peers.push({ pc, channel });
+
         channel.onmessage = e => {
-          log(e.data);
+          const msg = e.data;
+          log(msg);
+
+          // Command handling
+          if (msg.startsWith("/")) {
+            const command = msg.split(" ")[0];
+            switch (command) {
+              case "/ping":
+                channel.send("[Server] Pong!");
+                return;
+              case "/who":
+                const users = peers.map((p, i) => `User${i + 1}`).join(", ");
+                channel.send("[Server] Connected users: " + users);
+                return;
+              case "/help":
+                channel.send("[Server] Commands: /ping, /who, /help, /time");
+                return;
+              case "/time":
+                channel.send("[Server] Server time: " + new Date().toLocaleTimeString());
+                return;
+            }
+          }
+
+          // Broadcast normal messages
           peers.forEach(p => {
             if (p.channel.readyState === "open") {
-              p.channel.send(e.data);
+              p.channel.send(msg);
             }
           });
         };
