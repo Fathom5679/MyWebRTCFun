@@ -65,8 +65,21 @@
     function send() {
       const msgBox = document.getElementById("msg");
       const nickname = document.getElementById("nickname").value || "Anonymous";
-      const message = nickname + ": " + msgBox.value;
-      dc.send(message);
+      const rawMessage = msgBox.value.trim();
+
+      if (rawMessage.startsWith("/")) {
+        const command = rawMessage.toLowerCase();
+        if (command === "/help") {
+          const helpText = "Available commands:\n/help - show this help message";
+          document.getElementById("chat").value += helpText + "\n";
+        } else {
+          document.getElementById("chat").value += "Unknown command. Type /help for a list.\n";
+        }
+      } else {
+        const message = nickname + ": " + rawMessage;
+        dc.send(message);
+      }
+
       msgBox.value = "";
     }
 
