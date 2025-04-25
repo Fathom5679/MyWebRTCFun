@@ -34,191 +34,101 @@
   <script>
     const peers = [];
     const channels = { "#general": [] };
-    const roles = new Map();
-    const passwords = {};
-    const channelTopics = {};
-    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
     const chatHistory = [];
-    const wsPlaceholder = null; // Placeholder for future WebSocket signaling
+    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
 
-    const log = msg => {
+    function log(msg) {
       const logBox = document.getElementById("log");
-      logBox.value += msg + '\n';
+      logBox.value += msg + "\n";
       logBox.scrollTop = logBox.scrollHeight;
       chatHistory.push(msg);
-    };
+    }
 
-    const sendToPeer = (peer, msg) => {
-      if (peer.channel.readyState === "open") {
-        peer.channel.send(msg);
+    function createPeerConnection() {
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      return pc;
+    }
+
+    async function acceptConnection() {
+      const offerText = document.getElementById("offerInput").value;
+      const answerOutput = document.getElementById("answerOutput");
+
+      let parsed;
+      try {
+        parsed = JSON.parse(offerText);
+      } catch (err) {
+        answerOutput.value = "[Error] Invalid JSON in offer.";
+        return;
       }
-    };
 
-    const broadcastToChannel = (channel, msg) => {
-      channels[channel]?.forEach(p => sendToPeer(p, msg));
-    };
+      const pc = createPeerConnection();
+      const dataChannelCandidates = [];
 
-    const switchChannel = (peer, channel) => {
+      pc.ondatachannel = event => {
+        const channel = event.channel;
+        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general" };
+        peers.push(peer);
+        switchChannel(peer, "#general");
+
+        log("[Server] New client connected.");
+
+        channel.onmessage = e => handleMessage(peer, e.data);
+      };
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(parsed.offer));
+        for (const c of parsed.ice) {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        pc.onicecandidate = e => {
+          if (e.candidate) {
+            dataChannelCandidates.push(e.candidate);
+          } else {
+            answerOutput.value = JSON.stringify({ answer: pc.localDescription, ice: dataChannelCandidates }, null, 2);
+          }
+        };
+      } catch (err) {
+        answerOutput.value = `[Error] ${err.message}`;
+      }
+    }
+
+    function switchChannel(peer, channel) {
       if (!channels[channel]) channels[channel] = [];
       if (peer.currentChannel) {
         channels[peer.currentChannel] = channels[peer.currentChannel].filter(p => p !== peer);
       }
       channels[channel].push(peer);
       peer.currentChannel = channel;
-    };
-
-    function handleMessage(peer, text) {
-      console.log("Received message:", text);
-      if (text.startsWith("/")) {
-        const parts = text.slice(1).split(" ");
-        const command = parts[0].toLowerCase();
-        const args = parts.slice(1);
-
-        switch (command) {
-          case "nick":
-            peer.nickname = args[0];
-            sendToPeer(peer, `[Server] Nickname set to ${peer.nickname}`);
-            break;
-
-          case "avatar":
-            peer.avatar = args[0];
-            sendToPeer(peer, `[Server] Avatar set.`);
-            break;
-
-          case "join":
-            const [ch, pass] = args;
-            if (passwords[ch] && passwords[ch] !== pass) {
-              sendToPeer(peer, `[Server] Incorrect password for ${ch}`);
-            } else {
-              switchChannel(peer, ch);
-              if (!passwords[ch] && pass) passwords[ch] = pass;
-              sendToPeer(peer, `[Server] You joined ${ch}`);
-            }
-            break;
-
-          case "list":
-            const chList = Object.keys(channels).map(c => `${c} (${channels[c].length} users)`).join("\n- ");
-            sendToPeer(peer, `[Server] Available channels:\n- ${chList}`);
-            break;
-
-          case "topic":
-            const [channelName, ...topicParts] = args;
-            if (!channelName || !channels[channelName]) {
-              sendToPeer(peer, `[Server] Channel does not exist.`);
-              break;
-            }
-            if (topicParts.length === 0) {
-              const t = channelTopics[channelName] || "No topic set.";
-              sendToPeer(peer, `[Server] Topic for ${channelName}: "${t}"`);
-            } else {
-              const role = roles.get(peer.channel) || "user";
-              if (role === "admin" || role === "mod") {
-                channelTopics[channelName] = topicParts.join(" ");
-                broadcastToChannel(channelName, `[Server] Topic for ${channelName} set to: "${channelTopics[channelName]}"`);
-              } else {
-                sendToPeer(peer, `[Server] You don’t have permission to set topics.`);
-              }
-            }
-            break;
-
-          case "role":
-            if (roles.get(peer.channel) !== "admin") {
-              sendToPeer(peer, `[Server] Only admin can assign roles.`);
-              break;
-            }
-            const [targetNick, newRole] = args;
-            const targetPeer = peers.find(p => p.nickname === targetNick);
-            if (targetPeer && ["admin", "mod", "user"].includes(newRole)) {
-              roles.set(targetPeer.channel, newRole);
-              sendToPeer(peer, `[Server] Set role of ${targetNick} to ${newRole}`);
-              sendToPeer(targetPeer, `[Server] Your role is now ${newRole}`);
-            } else {
-              sendToPeer(peer, `[Server] Invalid target or role.`);
-            }
-            break;
-
-          case "msg":
-            const [target, ...msgParts] = args;
-            const targetPeer = peers.find(p => p.nickname === target);
-            if (targetPeer) {
-              sendToPeer(targetPeer, `[PRIVATE] ${peer.nickname}: ${msgParts.join(" ")}`);
-              sendToPeer(peer, `[TO ${target}] ${peer.nickname}: ${msgParts.join(" ")}`);
-            }
-            break;
-
-          case "help":
-            const role = roles.get(peer.channel) || "user";
-            let helpText = "[Server] Available commands:\n/nick [name]\n/avatar [url]\n/join [#channel] [password]\n/list\n/topic [#channel] [topic]\n/msg [user] [msg]\n/help";
-            if (role === "admin") helpText += "\n/role [nickname] [admin|mod|user]";
-            sendToPeer(peer, helpText);
-            break;
-
-          default:
-            sendToPeer(peer, `[Server] Unknown command: /${command}`);
-        }
-      } else {
-        const emojiMsg = text.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
-        const avatar = peer.avatar ? `<img src='${peer.avatar}' class='avatar-img'>` : '';
-        const formatted = `${peer.nickname || "Anonymous"} (${peer.currentChannel}): ${emojiMsg}`;
-        log(`${peer.nickname || "Anonymous"} (${peer.currentChannel}): ${emojiMsg}`);
-        broadcastToChannel(peer.currentChannel, `${avatar}${formatted}`);
-        new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
-      }
     }
 
-    async function acceptConnection() {
-      const answerTextarea = document.getElementById('answerOutput');
-      const iceCandidates = [];
-      let data;
-
-      try {
-        data = JSON.parse(document.getElementById('offerInput').value);
-        console.log("Parsed offer:", data);
-      } catch (e) {
-        answerTextarea.value = "[Error] Invalid JSON format in offer.";
-        console.error("Failed to parse offer:", e);
+    function handleMessage(peer, text) {
+      if (text.startsWith("/")) {
+        const parts = text.slice(1).split(" ");
+        const command = parts[0];
+        const args = parts.slice(1);
+        // Command handling placeholder
         return;
       }
 
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const emojiText = text.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
+      const formatted = `${peer.nickname} (${peer.currentChannel}): ${emojiText}`;
+      log(formatted);
+      broadcastToChannel(peer.currentChannel, formatted);
+      new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
+    }
 
-      pc.ondatachannel = event => {
-        console.log("Data channel event:", event);
-        const channel = event.channel;
-        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general", avatar: null };
-        roles.set(channel, "user");
-        switchChannel(peer, "#general");
-        peers.push(peer);
-        log("[Server] New client connected.");
-
-        channel.onmessage = e => {
-          try {
-            handleMessage(peer, e.data);
-          } catch (err) {
-            console.error("Message handling error:", err);
-          }
-        };
-      };
-
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        for (const c of data.ice) {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
-        }
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        pc.onicecandidate = e => {
-          if (e.candidate) {
-            iceCandidates.push(e.candidate);
-          } else {
-            answerTextarea.value = JSON.stringify({ answer: pc.localDescription, ice: iceCandidates }, null, 2);
-            console.log("Generated answer:", answerTextarea.value);
-          }
-        };
-      } catch (err) {
-        answerTextarea.value = `[Error] ${err.message}`;
-        console.error("Connection error:", err);
+    function sendToPeer(peer, msg) {
+      if (peer.channel.readyState === "open") {
+        peer.channel.send(msg);
       }
+    }
+
+    function broadcastToChannel(channel, msg) {
+      channels[channel]?.forEach(p => sendToPeer(p, msg));
     }
 
     function broadcast() {
@@ -230,8 +140,8 @@
 
     function disconnectAll() {
       peers.forEach(p => {
-        if (p.channel) p.channel.close();
-        if (p.pc) p.pc.close();
+        p.channel.close();
+        p.pc.close();
       });
       peers.length = 0;
       log("[Server] All clients disconnected.");
@@ -252,8 +162,7 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = e => {
-        const lines = e.target.result.split("\n");
-        lines.forEach(line => log(line));
+        e.target.result.split("\n").forEach(line => log(line));
       };
       reader.readAsText(file);
     }
