@@ -1,61 +1,150 @@
 <!DOCTYPE html>
-<html>
-<head><title>IRC Client</title></head>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IRC Client</title>
+  <style>
+    body { font-family: sans-serif; background: #1e1e2f; color: #f0f0f0; margin: 20px; }
+    h1 { color: #ffcb6b; }
+    textarea, input { background: #2d2d3a; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+    textarea { resize: none; }
+    #chat { width: 100%; height: 300px; }
+    #msg { width: 80%; }
+    .avatar { display: inline-block; width: 30px; height: 30px; border-radius: 50%; background: #888; text-align: center; line-height: 30px; margin-right: 5px; font-weight: bold; }
+    .message { margin-bottom: 8px; }
+    .controls, .command-bar { margin-top: 10px; }
+  </style>
+</head>
 <body>
   <h1>IRC Client</h1>
-  <label>Nickname: <input id="nickname" placeholder="Your nickname" /></label><br><br>
-  <h3>Step 1: Generate Offer</h3>
-  <button onclick="makeOffer()">Generate Offer</button>
-  <textarea id="offerOutput" rows="10" cols="70" readonly></textarea>
-  <h3>Step 2: Paste Server Answer</h3>
-  <textarea id="answerInput" rows="10" cols="70" placeholder="Paste server answer here"></textarea><br>
-  <button onclick="connect()">Connect</button>
+  <label>Nickname:
+    <input id="nickname" placeholder="Your nickname" />
+    <button onclick="saveNickname()">Save</button>
+  </label>
+  <div class="controls">
+    <h3>Step 1: Generate Offer</h3>
+    <button onclick="makeOffer()">Generate Offer</button>
+    <textarea id="offerOutput" rows="6" cols="80" readonly></textarea>
+
+    <h3>Step 2: Paste Server Answer</h3>
+    <textarea id="answerInput" rows="6" cols="80" placeholder="Paste server answer here"></textarea><br>
+    <button onclick="connect()">Connect</button>
+  </div>
+
   <h3>Chat</h3>
-  <textarea id="chat" rows="15" cols="70" readonly></textarea><br>
-  <input id="msg" placeholder="Message..." />
-  <button onclick="send()">Send</button>
-  <button onclick="disconnect()">Disconnect</button>
+  <div id="chat" style="overflow-y:auto; background: #111; padding: 10px; border-radius: 8px;"></div>
+
+  <div class="command-bar">
+    <input id="msg" placeholder="Message or command..." />
+    <button onclick="send()">Send</button>
+    <button onclick="disconnect()">Disconnect</button>
+  </div>
+
   <script>
     let pc, dc;
-    async function makeOffer() {
-      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      dc = pc.createDataChannel("chat");
-      dc.onmessage = e => {
-        document.getElementById("chat").value += "\n" + e.data;
-      };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const iceCandidates = [];
-      pc.onicecandidate = e => {
-        if (e.candidate) {
-          iceCandidates.push(e.candidate);
-        } else {
-          document.getElementById('offerOutput').value = JSON.stringify({
-            offer: pc.localDescription,
-            ice: iceCandidates
-          }, null, 2);
-        }
-      };
-    }
-    async function connect() {
-      const data = JSON.parse(document.getElementById('answerInput').value);
-      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      for (const c of data.ice) {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
+    let currentChannel = "#general";
+    let nickname = localStorage.getItem("nickname") || "Anonymous";
+
+    document.getElementById("nickname").value = nickname;
+
+    function saveNickname() {
+      const value = document.getElementById("nickname").value.trim();
+      if (value) {
+        nickname = value;
+        localStorage.setItem("nickname", nickname);
+        alert("Nickname saved!");
       }
     }
+
+    function log(msg, nick = null) {
+      const chat = document.getElementById("chat");
+      const div = document.createElement("div");
+      div.className = "message";
+      if (nick) {
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = nick[0].toUpperCase();
+        div.appendChild(avatar);
+      }
+      div.appendChild(document.createTextNode(msg));
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function makeOffer() {
+      try {
+        pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+        dc = pc.createDataChannel("chat");
+        dc.onopen = () => {
+          dc.send("/nick " + nickname);
+          dc.send("/join " + currentChannel);
+        };
+        dc.onmessage = e => {
+          const text = e.data;
+          const match = text.match(/^\[(.*?)\] (.+?): (.*)$/);
+          if (match) {
+            log(match[3], match[2]);
+          } else {
+            log(text);
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const iceCandidates = [];
+        pc.onicecandidate = e => {
+          if (e.candidate) {
+            iceCandidates.push(e.candidate);
+          } else {
+            document.getElementById('offerOutput').value = JSON.stringify({
+              offer: pc.localDescription,
+              ice: iceCandidates
+            }, null, 2);
+          }
+        };
+      } catch (err) {
+        alert("WebRTC not supported or blocked.");
+        console.error("Offer generation failed:", err);
+      }
+    }
+
+    async function connect() {
+      try {
+        const data = JSON.parse(document.getElementById('answerInput').value);
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        for (const c of data.ice) {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+        }
+      } catch (err) {
+        alert("Connection failed. Please check your server answer.");
+        console.error("Connection error:", err);
+      }
+    }
+
     function send() {
       const msgBox = document.getElementById("msg");
-      const nickname = document.getElementById("nickname").value || "Anonymous";
-      const message = nickname + ": " + msgBox.value;
-      dc.send(message);
+      const text = msgBox.value.trim();
+      if (!text || !dc || dc.readyState !== "open") return;
+
+      if (text.startsWith("/")) {
+        dc.send(text);
+      } else {
+        dc.send(`[${currentChannel}] ${nickname}: ${text}`);
+      }
+
       msgBox.value = "";
     }
+
     function disconnect() {
       if (dc) dc.close();
       if (pc) pc.close();
-      document.getElementById("chat").value += "\nDisconnected.";
+      log("[Client] Disconnected.");
     }
+
+    // 🔌 WebSocket Placeholder
+    // const ws = new WebSocket("wss://yourserver.com"); // <- reserved for future signaling fallback
   </script>
 </body>
 </html>
