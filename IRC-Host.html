@@ -9,6 +9,7 @@
     input { width: calc(100% - 120px); margin-right: 10px; }
     .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #3a3a4f; color: white; border: none; border-radius: 6px; cursor: pointer; }
     .btn:hover { background: #50506f; }
+    .avatar-img { width: 24px; height: 24px; vertical-align: middle; border-radius: 50%; margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -78,6 +79,11 @@
             sendToPeer(peer, `[Server] Nickname set to ${peer.nickname}`);
             break;
 
+          case "avatar":
+            peer.avatar = args[0];
+            sendToPeer(peer, `[Server] Avatar set.`);
+            break;
+
           case "join":
             const [ch, pass] = args;
             if (passwords[ch] && passwords[ch] !== pass) {
@@ -141,7 +147,7 @@
 
           case "help":
             const role = roles.get(peer.channel) || "user";
-            let helpText = "[Server] Available commands:\n/nick [name]\n/join [#channel] [password]\n/list\n/topic [#channel] [topic]\n/msg [user] [msg]\n/help";
+            let helpText = "[Server] Available commands:\n/nick [name]\n/avatar [url]\n/join [#channel] [password]\n/list\n/topic [#channel] [topic]\n/msg [user] [msg]\n/help";
             if (role === "admin") helpText += "\n/role [nickname] [admin|mod|user]";
             sendToPeer(peer, helpText);
             break;
@@ -151,22 +157,31 @@
         }
       } else {
         const emojiMsg = text.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
+        const avatar = peer.avatar ? `<img src='${peer.avatar}' class='avatar-img'>` : '';
         const formatted = `${peer.nickname || "Anonymous"} (${peer.currentChannel}): ${emojiMsg}`;
-        log(formatted);
-        broadcastToChannel(peer.currentChannel, formatted);
+        log(`${peer.nickname || "Anonymous"} (${peer.currentChannel}): ${emojiMsg}`);
+        broadcastToChannel(peer.currentChannel, `${avatar}${formatted}`);
         new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
       }
     }
 
     async function acceptConnection() {
-      const data = JSON.parse(document.getElementById('offerInput').value);
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       const answerTextarea = document.getElementById('answerOutput');
       const iceCandidates = [];
+      let data;
+
+      try {
+        data = JSON.parse(document.getElementById('offerInput').value);
+      } catch (e) {
+        answerTextarea.value = "[Error] Invalid JSON format in offer.";
+        return;
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
       pc.ondatachannel = event => {
         const channel = event.channel;
-        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general" };
+        const peer = { pc, channel, nickname: "Anonymous", currentChannel: "#general", avatar: null };
         roles.set(channel, "user");
         switchChannel(peer, "#general");
         peers.push(peer);
@@ -175,19 +190,23 @@
         channel.onmessage = e => handleMessage(peer, e.data);
       };
 
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-      for (const c of data.ice) {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      }
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      pc.onicecandidate = e => {
-        if (e.candidate) {
-          iceCandidates.push(e.candidate);
-        } else {
-          answerTextarea.value = JSON.stringify({ answer: pc.localDescription, ice: iceCandidates }, null, 2);
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        for (const c of data.ice) {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
         }
-      };
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        pc.onicecandidate = e => {
+          if (e.candidate) {
+            iceCandidates.push(e.candidate);
+          } else {
+            answerTextarea.value = JSON.stringify({ answer: pc.localDescription, ice: iceCandidates }, null, 2);
+          }
+        };
+      } catch (err) {
+        answerTextarea.value = `[Error] ${err.message}`;
+      }
     }
 
     function broadcast() {
