@@ -1,152 +1,108 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>IRC Client</title>
+  <title>IRC Chat Client</title>
   <style>
-    body { font-family: sans-serif; background: #1e1e2f; color: #f0f0f0; margin: 20px; }
-    h1 { color: #ffcb6b; }
-    textarea, input { background: #2d2d3a; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
-    textarea { resize: none; }
-    #chat { width: 100%; height: 300px; overflow-y: auto; background: #111; padding: 10px; border-radius: 8px; margin-top: 10px; }
-    #msg { width: 80%; }
-    .avatar { display: inline-block; width: 30px; height: 30px; border-radius: 50%; background: #888; text-align: center; line-height: 30px; margin-right: 5px; font-weight: bold; }
-    .message { margin-bottom: 8px; }
-    .controls, .command-bar { margin-top: 10px; }
+    body { font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 20px; }
+    input, textarea { background: #1e1e2e; color: white; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+    textarea { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+    input { width: calc(100% - 120px); margin-right: 10px; }
+    .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #33334d; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    .btn:hover { background: #4a4a6f; }
+    .avatar-img { width: 24px; height: 24px; vertical-align: middle; border-radius: 50%; margin-right: 6px; }
   </style>
 </head>
 <body>
   <h1>IRC Client</h1>
-  <label>Nickname:
-    <input id="nickname" placeholder="Your nickname" />
-    <button onclick="saveNickname()">Save</button>
-  </label>
-  <div class="controls">
-    <h3>Step 1: Generate Offer</h3>
-    <button onclick="makeOffer()">Generate Offer</button>
-    <textarea id="offerOutput" rows="6" cols="80" readonly></textarea>
+  <h3>Paste Server Answer</h3>
+  <textarea id="answerInput" rows="6" placeholder="Paste server answer here"></textarea><br>
+  <button class="btn" onclick="connectToServer()">Connect to Server</button>
 
-    <h3>Step 2: Paste Server Answer</h3>
-    <textarea id="answerInput" rows="6" cols="80" placeholder="Paste server answer here"></textarea><br>
-    <button onclick="connect()">Connect</button>
-  </div>
+  <h3>Send This Offer to Server</h3>
+  <textarea id="offerOutput" rows="6" readonly></textarea>
 
-  <h3>Chat</h3>
-  <div id="chat"></div>
-
-  <div class="command-bar">
-    <input id="msg" placeholder="Message or command..." />
-    <button onclick="send()">Send</button>
-    <button onclick="disconnect()">Disconnect</button>
-  </div>
+  <h3>Chat Log</h3>
+  <textarea id="log" rows="15" readonly></textarea><br>
+  <input id="messageInput" placeholder="Your message...">
+  <button class="btn" onclick="sendMessage()">Send</button>
 
   <script>
-    let pc, dc;
-    let currentChannel = "#general";
-    let nickname = localStorage.getItem("nickname") || "Anonymous";
+    let pc;
+    let dc;
+    const logBox = document.getElementById("log");
+    const chatHistory = [];
 
-    document.getElementById("nickname").value = nickname;
+    const emojiMap = { smile: "😄", fire: "🔥", wave: "👋", heart: "❤️", thumbsup: "👍" };
 
-    function saveNickname() {
-      const value = document.getElementById("nickname").value.trim();
-      if (value) {
-        nickname = value;
-        localStorage.setItem("nickname", nickname);
-        alert("Nickname saved!");
-      }
+    function log(msg) {
+      logBox.value += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+      chatHistory.push(msg);
     }
 
-    function log(msg, nick = null) {
-      const chat = document.getElementById("chat");
-      const div = document.createElement("div");
-      div.className = "message";
-      if (nick) {
-        const avatar = document.createElement("span");
-        avatar.className = "avatar";
-        avatar.textContent = nick[0].toUpperCase();
-        div.appendChild(avatar);
-      }
-      div.appendChild(document.createTextNode(msg));
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
+    function createPeerConnection() {
+      pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const candidates = [];
+
+      dc = pc.createDataChannel("chat");
+      dc.onopen = () => log("[Client] Connected to server.");
+      dc.onmessage = e => {
+        log(e.data);
+        new Audio("https://www.soundjay.com/buttons/sounds/button-3.mp3").play();
+      };
+
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          candidates.push(e.candidate);
+        } else {
+          document.getElementById("offerOutput").value = JSON.stringify({ offer: pc.localDescription, ice: candidates }, null, 2);
+        }
+      };
+
+      return pc;
     }
 
-    async function makeOffer() {
+    async function connectToServer() {
+      const answerText = document.getElementById("answerInput").value;
+      let parsed;
       try {
-        pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
-        const iceCandidates = [];
-        pc.onicecandidate = e => {
-          if (e.candidate) {
-            iceCandidates.push(e.candidate);
-          } else {
-            document.getElementById('offerOutput').value = JSON.stringify({
-              offer: pc.localDescription,
-              ice: iceCandidates
-            }, null, 2);
-          }
-        };
-
-        dc = pc.createDataChannel("chat");
-        dc.onopen = () => {
-          dc.send("/nick " + nickname);
-          dc.send("/join " + currentChannel);
-        };
-        dc.onmessage = e => {
-          const text = e.data;
-          const match = text.match(/\[(.*?)\] (.+?): (.*)/);
-          if (match) {
-            log(match[3], match[2]);
-          } else {
-            log(text);
-          }
-        };
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        parsed = JSON.parse(answerText);
       } catch (err) {
-        alert("WebRTC not supported or blocked.");
-        console.error("Offer generation failed:", err);
+        log("[Error] Invalid JSON in answer.");
+        return;
       }
-    }
 
-    async function connect() {
       try {
-        const data = JSON.parse(document.getElementById('answerInput').value);
-        if (!data.answer || !data.ice) throw new Error("Missing SDP answer or ICE candidates");
-
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        for (const c of data.ice) {
+        await pc.setRemoteDescription(new RTCSessionDescription(parsed.answer));
+        for (const c of parsed.ice) {
           await pc.addIceCandidate(new RTCIceCandidate(c));
         }
       } catch (err) {
-        alert("Connection failed. Please check your server answer.");
-        console.error("Connection error:", err);
+        log("[Error] " + err.message);
       }
     }
 
-    function send() {
-      const msgBox = document.getElementById("msg");
-      const text = msgBox.value.trim();
-      if (!text || !dc || dc.readyState !== "open") return;
+    async function start() {
+      createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+    }
 
-      if (text.startsWith("/")) {
-        dc.send(text);
+    function sendMessage() {
+      const msg = document.getElementById("messageInput").value;
+      const emojiText = msg.replace(/:(\w+):/g, (m, p1) => emojiMap[p1] || m);
+      if (dc.readyState === "open") {
+        dc.send(emojiText);
+        log("Me: " + emojiText);
+        document.getElementById("messageInput").value = "";
       } else {
-        dc.send(`[${currentChannel}] ${nickname}: ${text}`);
+        log("[Error] Connection not open.");
       }
-
-      msgBox.value = "";
     }
 
-    function disconnect() {
-      if (dc) dc.close();
-      if (pc) pc.close();
-      log("[Client] Disconnected.");
-    }
-
-    // 🔌 WebSocket Placeholder
-    // const ws = new WebSocket("wss://yourserver.com"); // <- reserved for future signaling fallback
+    window.onload = () => {
+      start();
+    };
   </script>
 </body>
 </html>
