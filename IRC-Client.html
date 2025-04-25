@@ -9,6 +9,7 @@
     input { width: calc(100% - 120px); margin-right: 10px; }
     .btn { padding: 8px 12px; margin: 4px 4px 4px 0; background: #33334d; color: white; border: none; border-radius: 6px; cursor: pointer; }
     .btn:hover { background: #4a4a6f; }
+    .system { color: #00afff; font-style: italic; }
   </style>
 </head>
 <body>
@@ -40,7 +41,11 @@
 
       dc.onmessage = e => {
         const chatBox = document.getElementById("chat");
-        chatBox.value += e.data + "\n";
+        if (e.data.startsWith("[Server]")) {
+          chatBox.value += "%c" + e.data + "\n";
+        } else {
+          chatBox.value += e.data + "\n";
+        }
         chatBox.scrollTop = chatBox.scrollHeight;
       };
 
@@ -93,11 +98,11 @@
 /mute user - (mod/admin) mute a user
 /unmute user - (mod/admin) unmute a user
 /roles - list your current roles`;
-          document.getElementById("chat").value += helpText + "\n";
+          document.getElementById("chat").value += `[Client] ${helpText}\n`;
         } else if (["/join", "/create"].includes(command) && parts.length >= 2) {
           currentChannel = parts[1];
           document.getElementById("channel").value = currentChannel;
-          document.getElementById("chat").value += `${command === "/join" ? "Switched to" : "Created and switched to"} channel: ${currentChannel}\n`;
+          document.getElementById("chat").value += `[Client] ${command === "/join" ? "Switched to" : "Created and switched to"} channel: ${currentChannel}\n`;
         } else if (["/list", "/roles"].includes(command)) {
           dc.send(command);
         } else if (command === "/who") {
@@ -108,11 +113,11 @@
         } else if (command === "/nick" && parts.length >= 2) {
           const newNick = parts[1];
           document.getElementById("nickname").value = newNick;
-          document.getElementById("chat").value += `Nickname changed to ${newNick}\n`;
+          document.getElementById("chat").value += `[Client] Nickname changed to ${newNick}\n`;
         } else if (["/kick", "/ban", "/promote", "/mute", "/unmute"].includes(command) && parts.length >= 2) {
           dc.send(rawMessage);
         } else {
-          document.getElementById("chat").value += "Unknown command. Type /help for a list.\n";
+          document.getElementById("chat").value += `[Client] Unknown command. Type /help for a list.\n`;
         }
       } else {
         const message = `[${currentChannel}] ` + nickname + ": " + rawMessage;
@@ -126,7 +131,7 @@
       if (dc) dc.close();
       if (pc) pc.close();
       const chatBox = document.getElementById("chat");
-      chatBox.value += "\nDisconnected.";
+      chatBox.value += "\n[Client] Disconnected.";
       chatBox.scrollTop = chatBox.scrollHeight;
     }
   </script>
