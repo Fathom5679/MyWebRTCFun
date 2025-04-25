@@ -79,7 +79,18 @@
         const command = parts[0].toLowerCase();
 
         if (command === "/help") {
-          const helpText = "Available commands:\n/help - show this help message\n/join #channel[:password] - join a channel\n/create #channel[:password] - create a new channel";
+          const helpText = `Available commands:
+/help - show this help message
+/join #channel[:password] - join a channel
+/create #channel[:password] - create a new channel
+/list - list available channels
+/who - show users in the current channel
+/me action - send an action message
+/nick newname - change your nickname
+/kick user - (admin) kick a user
+/ban user - (admin) ban a user
+/promote user - (admin) promote a user to moderator
+/mute user - (mod/admin) mute a user`;
           document.getElementById("chat").value += helpText + "\n";
         } else if (command === "/join" && parts.length >= 2) {
           currentChannel = parts[1];
@@ -89,6 +100,19 @@
           currentChannel = parts[1];
           document.getElementById("channel").value = currentChannel;
           document.getElementById("chat").value += `Created and switched to channel: ${currentChannel}\n`;
+        } else if (command === "/list") {
+          dc.send("/list");
+        } else if (command === "/who") {
+          dc.send("/who " + currentChannel);
+        } else if (command === "/me" && parts.length >= 2) {
+          const action = parts.slice(1).join(" ");
+          dc.send(`* ${nickname} ${action}`);
+        } else if (command === "/nick" && parts.length >= 2) {
+          const newNick = parts[1];
+          document.getElementById("nickname").value = newNick;
+          document.getElementById("chat").value += `Nickname changed to ${newNick}\n`;
+        } else if (["/kick", "/ban", "/promote", "/mute"].includes(command) && parts.length >= 2) {
+          dc.send(rawMessage);
         } else {
           document.getElementById("chat").value += "Unknown command. Type /help for a list.\n";
         }
