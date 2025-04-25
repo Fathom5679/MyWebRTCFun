@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+
+<html>
+
+<head><title>Host (MUD Server)</title></head>
+
+<body>
+
+  <h1>WebRTC Host - MUD Server</h1>
+
+
+
+  <h3>Paste Client Offer</h3>
+
+  <textarea id="offerInput" rows="10" cols="70" placeholder="Paste client offer here"></textarea><br>
+
+  <button onclick="acceptConnection()">Accept Connection</button>
+
+
+
+  <h3>Send this Answer to Client</h3>
+
+  <textarea id="answerOutput" rows="10" cols="70" readonly></textarea>
+
+
+
+  <h3>Server Console</h3>
+
+  <textarea id="log" rows="15" cols="70" readonly></textarea><br>
+
+  <input id="serverInput" placeholder="Broadcast a message..." />
+
+  <button onclick="broadcast()">Send to All</button>
+
+
+
+  <script>
+
+    const peers = [];
+
+    const log = msg => {
+
+      document.getElementById('log').value += msg + '\n';
+
+    };
+
+
+
+    async function acceptConnection() {
+
+      const data = JSON.parse(document.getElementById('offerInput').value);
+
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+      const answerTextarea = document.getElementById('answerOutput');
+
+      const messages = [];
+
+
+
+      pc.ondatachannel = event => {
+
+        const channel = event.channel;
+
+        log("New client connected.");
+
+
+
+        channel.onmessage = e => {
+
+          log("Client: " + e.data);
+
+          // Echo back to all clients
+
+          peers.forEach(p => p.channel.send("Player: " + e.data));
+
+        };
+
+
+
+        peers.push({ pc, channel });
+
+      };
+
+
+
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+      for (const c of data.ice) {
+
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+
+      }
+
+
+
+      const answer = await pc.createAnswer();
+
+      await pc.setLocalDescription(answer);
+
+
+
+      const answerIce = [];
+
+      pc.onicecandidate = e => {
+
+        if (e.candidate) {
+
+          answerIce.push(e.candidate);
+
+        } else {
+
+          answerTextarea.value = JSON.stringify({
+
+            answer: pc.localDescription,
+
+            ice: answerIce
+
+          }, null, 2);
+
+        }
+
+      };
+
+    }
+
+
+
+    function broadcast() {
+
+      const msg = document.getElementById('serverInput').value;
+
+      peers.forEach(p => p.channel.send("Server: " + msg));
+
+      log("Server: " + msg);
+
+      document.getElementById('serverInput').value = "";
+
+    }
+
+  </script>
+
+</body>
+
+</html>
